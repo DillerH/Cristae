@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Feb 21 11:38:28 2025
+
+@author: diller
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.constants import pi as pi
+import pandas as pd
+import time as time
+
+
+stepCount = 1000 #in µs
+frameStatus = True
+printData = False
+tau = 10**(-6) #determines 'time scale' i.e. ms, µs, ns
+frameSizeMax = 100 #nm
+
+class Particle:
+    def __init__(self, redox, leaf):
+        self.position = [0, 0]  
+        self.redox = redox
+        self.leaf = leaf
+        self.Dict = 0
+        self.outofBound = False
+    def reduce(self):
+        self.redox = self.redox + 1
+    def oxidize(self):
+        self.redox = self.redox - 1
+
+class ParticleGroup:
+    def __init__(self, particleList, r, D, label):
+        self.numParticles = len(particleList)
+        self.particles = np.array(particleList, dtype=object) # Store as object array
+        self.positions = self.positions = np.array([[particle.position[0], particle.position[1]] for particle in particleList]) #check this line in the future from chatGPT
+        self.D = D #nm^2/s
+        self.radius = r
+        self.label = label
+        self.delta = np.sqrt(2 * tau * D)   #nm step length in nm for 1µs
+        
+        
+        
+    def randStep(self, frameSize, setBorder = False):
+        randGen = np.random.default_rng()#calls random generator
+        randVector = randGen.random((self.numParticles)) * 2 * pi # gens 0-1 array length of number of particles % & scales to radians
+        xVector = np.cos(randVector) * self.delta
+        yVector = np.sin(randVector) * self.delta
+        cordVector = np.stack((xVector, yVector), axis=1)
+        self.positions = self.positions + cordVector
+        
+        # I feel like this next section could be faster
+
+        #updating particles
+        for i, particle in enumerate(self.particles):
+            #update particle positions
+            particle.position[0] = self.positions[i, 0] #x
+            particle.position[1] = self.positions[i, 1] #y
+
+#check if out of frame
+            if setBorder == True:
+                if particle.position[0] > frameSize: #x > frameSize
+                    particle.position[0] = 0
+                    self.positions[i,0] = 0
+                
+                elif particle.position[1] > frameSize: #y > frameSize
+                    particle.position[1] = 0
+                    self.positions[i,1] = 0
+                
+                elif particle.position[0] < 0: #x < frameSize
+                    particle.position[0] = frameSize
+                    self.positions[i,0] = frameSize
+                
+                elif particle.position[1] < 0: #y < frameSize
+                    particle.position[1] = frameSize
+                    self.positions[i,1] = frameSize
+            
+            
+            """
+            Deleting method doesn't work if more than one particle is removed per tick'
+            Try changing to a while loop set 
+            for i, particle in enumerate(self.particles):
+                if particle.position[0] > frameSize  or particle.position[1] > frameSize or particle.position[0] < 0 or particle.position[1] < 0:
+                    print('Removing Particle {}, at time {}'.format(i,time))
+                    #escapedParticles.append(particle)
+                    #timeEscaped.append(time)
+                    particle.position = [np.delete(self.particles, i, axis=0)]
+                    self.positions = np.delete(self.positions, i, axis=0)
+            """
+            
+    def initRandFrame(self, frameSize):
+        randGen = np.random.default_rng()
+        randXVector = randGen.random(self.numParticles) * frameSize
+        randYVector = randGen.random(self.numParticles) * frameSize
+        cordVector = np.stack((randXVector, randYVector), axis=1)
+        
+        self.positions = cordVector
+        #update particle positions
+        for i, particle in enumerate(self.particles):
+
+            particle.position[0] = self.positions[i, 0] #x
+            particle.position[1] = self.positions[i, 1] #y
+            
+    def reductionActivity(self, substrateGroup, reactionRadius):
+        
+        for i, protein in enumerate(self.particles):
+            #setting bounds
+            for k, substrate in enumerate(substrateGroup.particles):
+                distance = np.sqrt((protein.position[0] + substrate.position[0])**2 + (protein.position[1] + substrate.position[1])**2)
+
+                if distance <= reactionRadius and substrate.redox == 0 :
+                    substrate.redox = substrate.redox + 2
+                    
+    def oxidationActivity(self, substrateGroup, reactionRadius):
+        
+        for i, protein in enumerate(self.particles):
+            #setting bounds
+            for k, substrate in enumerate(substrateGroup.particles):
+                distance = np.sqrt((protein.position[0] + substrate.position[0])**2 + (protein.position[1] + substrate.position[1])**2)
+
+                if distance <= reactionRadius and substrate.redox >= 1 :
+                    substrate.redox = substrate.redox - 1
+    
+        
+def plotFrame(substrateGroup, proteinGroupI, proteinGroupIII, time):
+     
+    print('Q1\n',substrateGroup.positions)
+    
+    print('Protein\n',proteinGroupI.positions)
+    Q0eList, Q1eList, Q2eList = [], [], []
+    Q0ePresent, Q1ePresent, Q2ePresent = False, False, False
+
+    for Q in substrateGroup.particles:
+        #print(Q.redox)
+        if Q.redox == 0:
+            Q0eList.append(Q)
+        if Q.redox == 1:
+            Q1eList.append(Q)
+        if Q.redox ==2:
+            Q2eList.append(Q)
+    
+    #print(Q0eList, Q1eList, Q2eList)
+    if len(Q0eList) > 1:
+        Q0e = ParticleGroup(Q0eList, 1, 1, 'Q10.e0')
+        Q0ePresent = True
+    if len(Q1eList) > 1:
+        Q1e = ParticleGroup(Q1eList, 1, 1, 'Q10.e1')
+        Q1ePresent = True
+    if len(Q2eList) > 1:
+        Q2e = ParticleGroup(Q2eList, 1, 1, 'Q10.e1')
+        Q2ePresent = True
+
+    
+    fig, ax = plt.subplots()
+    #print(Q0e.positions)
+    ax.scatter(proteinGroupI.positions[:,0], proteinGroupI.positions[:,1],s=200, label = 'CI', color = 'crimson')
+    ax.scatter(proteinGroupIII.positions[:,0], proteinGroupIII.positions[:,1],s=80, label = 'CIII', color = 'slateblue')
+    if Q0ePresent:
+        ax.scatter(Q0e.positions[:,0], Q0e.positions[:,1], label = 'Q10-0e',s=20, color = 'lightgray')
+    if Q1ePresent:
+        ax.scatter(Q1e.positions[:,0], Q1e.positions[:,1], label = 'Q10-1e',s=20, color = 'dimgray')
+    if Q2ePresent:
+        ax.scatter(Q2e.positions[:,0], Q2e.positions[:,1], label = 'Q10-2e',s=20, color = 'black') 
+    ax.set_xlabel('x (nm)')
+    ax.set_ylabel('y (nm)')
+    ax.set_title('Reduction Activity of Simulated Particles after '+str(time/1000)+' ms')
+    ax.legend()
+    plt.show()
+            
+
+def plot(particles):
+    hist, xedges, yedges = np.histogram2d(particles.positions[:, 0], particles.positions[:, 1], bins=20)
+    plt.imshow(hist.T, origin='lower', extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]], aspect='auto', cmap='viridis')
+    plt.colorbar(label='Counts')
+    plt.xlabel('x (nm)')
+    plt.ylabel('y (nm)')
+    plt.title('2D Histogram of Particle Positions '+str((stepCount)/1000)+' milliseconds/s')
+    plt.show()
+
+    # 3D representation of a 2D histo
+    df = pd.DataFrame(particles.positions, columns=['x', 'y'])
+
+    # Reusing bin edges from 2D histogram
+    x_bins = xedges
+    y_bins = yedges
+
+    df['x_bin'] = pd.cut(df['x'], bins=x_bins)
+    df['y_bin'] = pd.cut(df['y'], bins=y_bins)
+
+    # Calculate the frequency in each bin
+    bin_counts = df.groupby(['x_bin', 'y_bin']).size().unstack(fill_value=0)
+
+    # Get the bin centers for plotting
+    x_bin_centers = (x_bins[:-1] + x_bins[1:]) / 2
+    y_bin_centers = (y_bins[:-1] + y_bins[1:]) / 2
+
+    # Create a 3D plot
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Create meshgrid of bin centers
+    x_mesh, y_mesh = np.meshgrid(x_bin_centers, y_bin_centers)
+
+    # Plot the 3D surface
+    ax.plot_surface(x_mesh, y_mesh, bin_counts.values, cmap='viridis')
+    
+    # Set labels and title
+    ax.set_xlabel('x (nm)')
+    ax.set_ylabel('y (nm)')
+    ax.set_zlabel('Frequency')
+    ax.set_title('3D Representation of the 2D Histogram '+str((stepCount)/1000)+' millisecond/s')
+    plt.show()
+    return
+
+
+def plotTrace(tracex, tracey):
+   # print('Starting Trace plot')
+    zipList = zip(tracex, tracey)
+    df = pd.DataFrame(zipList,columns=['x', 'y'])
+
+    
+    color = iter(plt.cm.rainbow(np.linspace(0, 1, len(df)+1)))
+    
+    for i in range(0, len(df)-1 ):
+        c = next(color)
+        plt.plot(df.x.iloc[i:i+2], df.y.iloc[i:i+2],color = c)
+        plt.xlabel('x(nm)')
+        plt.ylabel('y(nm)')
+        plt.title('Single Molecule Trace '+str((stepCount)/1000)+' millisecond/s')
+        plt.grid()
+        
+    #plt.xlim(-250,250)
+    #plt.ylim(-250,250)
+    plt.show()
+    
+    
+    
+def main():
+    
+    Q10list = list(Particle(0, 1) for i in range(0,51))
+    CIlist = list(Particle(1, 1) for i in range(0,4)) 
+    CIIIlist = list(Particle(1, 1) for i in range(0,7)) 
+    
+    Q10 = ParticleGroup(Q10list, 0.5, 8.2*10**6, 'Q10')
+    CI = ParticleGroup(CIlist, 0.5, 8.2*10**6, 'CI')
+    CIII = ParticleGroup(CIIIlist, 0.5, 8.2*10**6, 'CI')
+    #CI = ParticleGroup(POPClist, 0.68, 7.79*10**6)
+    
+    traceListx = []
+    traceListy = []
+    
+    
+    df_Q10 = pd.DataFrame(Q10.positions, columns=['x0','y0'])
+    #df_printout.index.name = 'Q10'
+    
+    Q10.initRandFrame(frameSizeMax)
+    
+    for i in range(stepCount):
+
+        particle1 = Q10.particles[0]
+        traceListx.append(particle1.position[0])
+        traceListy.append(particle1.position[1])
+        Q10.randStep(frameSizeMax, setBorder = frameStatus)
+        CI.randStep(frameSizeMax, setBorder = frameStatus)
+        CIII.randStep(frameSizeMax, setBorder = frameStatus)
+        CI.reductionActivity(Q10, 10)
+        CIII.oxidationActivity(Q10, 10)
+
+        if printData == True and i % 1000 == 0 :
+            df_tempQ10 = pd.DataFrame(Q10.positions,columns=['x'+str(i),'y'+str(i)])
+            df_Q10 = pd.concat([df_Q10, df_tempQ10], axis=1)
+    
+
+    plot(Q10)
+    plotFrame(Q10, CI, CIII, stepCount)
+
+
+if __name__ == '__main__':
+    s = time.time()
+    main()
+    e = time.time()
+    print(e-s)
